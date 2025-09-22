@@ -9,6 +9,18 @@ class Media
     use HasInputOptions;
 
     /**
+     * Global progress callback for upload tracking
+     */
+    protected static $globalProgressCallback = null;
+
+    /**
+     * Cumulative tracking for multiple upload calls
+     */
+    protected static $cumulativeUploadedFiles = 0;
+    protected static $cumulativeTotalFiles = 0;
+    protected static $isFirstCall = true;
+
+    /**
      * @var \ProtoneMedia\LaravelFFMpeg\Filesystem\Disk
      */
     private $disk;
@@ -34,6 +46,28 @@ class Media
     public static function make($disk, string $path): self
     {
         return new static(Disk::make($disk), $path);
+    }
+
+    /**
+     * Set global progress callback for upload tracking
+     */
+    public static function setGlobalProgressCallback($callback): void
+    {
+        static::$globalProgressCallback = $callback;
+        static::$cumulativeUploadedFiles = 0;
+        static::$cumulativeTotalFiles = 0;
+        static::$isFirstCall = true;
+    }
+
+    /**
+     * Clear global progress callback
+     */
+    public static function clearGlobalProgressCallback(): void
+    {
+        static::$globalProgressCallback = null;
+        static::$cumulativeUploadedFiles = 0;
+        static::$cumulativeTotalFiles = 0;
+        static::$isFirstCall = true;
     }
 
     public function getDisk(): Disk
@@ -129,11 +163,38 @@ class Media
         }
 
         $temporaryDirectoryDisk = $this->temporaryDirectoryDisk();
-
         $destinationAdapater = $this->getDisk()->getFilesystemAdapter();
+        $allFiles = $temporaryDirectoryDisk->allFiles();
+        $totalFiles = count($allFiles);
+        $uploadedFiles = 0;
 
-        foreach ($temporaryDirectoryDisk->allFiles() as $path) {
+        // Si es la primera llamada, inicializar el tracking acumulativo
+        if (static::$isFirstCall) {
+            static::$cumulativeUploadedFiles = 0;
+            static::$cumulativeTotalFiles = 0;
+            static::$isFirstCall = false;
+        }
+
+        // Sumar los archivos de esta llamada al total acumulativo
+        static::$cumulativeTotalFiles += $totalFiles;
+
+        // Notificar progreso inicial si hay callback
+        if (static::$globalProgressCallback) {
+            $progressPercentage = static::$cumulativeTotalFiles > 0 ? (static::$cumulativeUploadedFiles / static::$cumulativeTotalFiles) * 100 : 0;
+            call_user_func(static::$globalProgressCallback, static::$cumulativeUploadedFiles, static::$cumulativeTotalFiles, $progressPercentage);
+        }
+
+        foreach ($allFiles as $path) {
             $destinationAdapater->writeStream($path, $temporaryDirectoryDisk->readStream($path));
+
+            $uploadedFiles++;
+            static::$cumulativeUploadedFiles++;
+            $progressPercentage = static::$cumulativeTotalFiles > 0 ? (static::$cumulativeUploadedFiles / static::$cumulativeTotalFiles) * 100 : 0;
+
+            // Notificar progreso después de cada archivo subido
+            if (static::$globalProgressCallback) {
+                call_user_func(static::$globalProgressCallback, static::$cumulativeUploadedFiles, static::$cumulativeTotalFiles, $progressPercentage);
+            }
 
             if ($visibility) {
                 $destinationAdapater->setVisibility($path, $visibility);
