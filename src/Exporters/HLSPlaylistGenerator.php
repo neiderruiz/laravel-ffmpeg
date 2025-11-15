@@ -55,13 +55,20 @@ class HLSPlaylistGenerator implements PlaylistGenerator
         return Collection::make($segmentPlaylists)->map(function (Media $segmentPlaylist, $key) use ($driver) {
             $streamInfoLine = $this->getStreamInfoLine($segmentPlaylist, $key);
 
-            $media = (new MediaOpener($segmentPlaylist->getDisk(), $driver))
-                ->openWithInputOptions($segmentPlaylist->getPath(), ['-allowed_extensions', 'ALL']);
+            // Intentar obtener el framerate, pero no fallar si no se puede leer (ej. archivos encriptados)
+            try {
+                $media = (new MediaOpener($segmentPlaylist->getDisk(), $driver))
+                    ->openWithInputOptions($segmentPlaylist->getPath(), ['-allowed_extensions', 'ALL']);
 
-            if ($media->getVideoStream()) {
-                if ($frameRate = StreamParser::new($media->getVideoStream())->getFrameRate()) {
-                    $streamInfoLine .= ",FRAME-RATE={$frameRate}";
+                if ($media->getVideoStream()) {
+                    if ($frameRate = StreamParser::new($media->getVideoStream())->getFrameRate()) {
+                        $streamInfoLine .= ",FRAME-RATE={$frameRate}";
+                    }
                 }
+            } catch (\Exception $e) {
+                // Si falla la lectura (archivos encriptados, temporales no disponibles, etc.)
+                // simplemente omitir el framerate y continuar
+                \Illuminate\Support\Facades\Log::debug("Could not read framerate for HLS segment: {$e->getMessage()}");
             }
 
             return [$streamInfoLine, $segmentPlaylist->getFilename()];
